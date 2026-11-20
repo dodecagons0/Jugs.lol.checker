@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jugs.lol username checker</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #ffffff; --text: #1d1d1b; --muted: #6b6b66;
+    --line: #e3e3de; --accent: #2f6fed; --accent-text: #ffffff;
+    --good: #1a8f4c; --warn: #b7791f; --danger: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141415; --card: #1e1e20; --text: #ececea; --muted: #9a9a95;
+      --line: #313134; --accent: #5b8cff; --accent-text: #0d0d0e;
+      --good: #4cc983; --warn: #e0b04a; --danger: #ef6f60;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 1.35rem; margin: 4px 0 18px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; padding: 14px; margin-bottom: 14px;
+  }
+  .card h2 {
+    font-size: .78rem; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin: 0 0 10px; font-weight: 600;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    border: 1px solid var(--line); background: transparent; color: var(--text);
+    border-radius: 999px; padding: 8px 14px; font: inherit; cursor: pointer;
+  }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .chip:disabled { opacity: .45; cursor: not-allowed; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .row label { color: var(--muted); font-size: .9rem; }
+  input[type="number"], input[type="text"], input[type="password"], select {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-width: 0;
+  }
+  input[type="number"] { width: 5.5rem; }
+  input[type="range"] { flex: 1; min-width: 120px; }
+  .btns { display: flex; gap: 10px; }
+  button.btn {
+    flex: 1; font: inherit; font-weight: 600; padding: 12px; border-radius: 12px;
+    border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer;
+  }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  button.btn:disabled { opacity: .4; cursor: not-allowed; }
+  .bar { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; margin: 12px 0 8px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .status { color: var(--muted); font-size: .92rem; min-height: 1.3em; }
+  .stats { display: flex; gap: 16px; font-size: .92rem; margin-top: 6px; flex-wrap: wrap; }
+  .good { color: var(--good); } .warn { color: var(--warn); } .danger { color: var(--danger); }
+  .found {
+    font: 15px/1.6 ui-monospace, Menlo, Consolas, monospace;
+    max-height: 260px; overflow: auto; margin: 0; padding: 0; list-style: none;
+  }
+  .found li { padding: 1px 0; }
+  .empty { color: var(--muted); font-size: .92rem; }
+  .small-btns { display: flex; gap: 8px; margin-top: 10px; }
+  .small-btns button {
+    font: inherit; font-size: .9rem; padding: 7px 12px; border-radius: 10px;
+    border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer;
+  }
+  .log {
+    font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; color: var(--muted);
+    max-height: 140px; overflow: auto; margin-top: 10px; white-space: pre-wrap;
+  }
+  .testout { font: 13px/1.6 ui-monospace, Menlo, Consolas, monospace; margin-top: 10px; word-break: break-all; }
+  .note { color: var(--muted); font-size: .85rem; margin-top: 10px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>jugs.lol username checker</h1>
+
+  <section class="card">
+    <h2>Pattern</h2>
+    <div class="chips" id="modes"></div>
+    <div class="row" id="wordLen" hidden>
+      <label>Word length</label>
+      <select id="wmin"></select>
+      <span>to</span>
+      <select id="wmax"></select>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Run</h2>
+    <div class="btns">
+      <button class="btn primary" id="startBtn">Start</button>
+      <button class="btn" id="stopBtn" disabled>Stop</button>
+      <button class="btn" id="resetBtn">Reset</button>
+    </div>
+    <div class="bar"><div id="barFill"></div></div>
+    <div class="status" id="status">Loading...</div>
+    <div class="stats">
+      <span class="good" id="statFound">0 available</span>
+      <span id="statTaken">0 taken</span>
+      <span class="warn" id="statUnclear" hidden>0 unclear</span>
+    </div>
+    <div class="row">
+      <label for="workers">Speed</label>
+      <input type="range" id="workers" min="1" max="10" value="3">
+      <span id="workersVal">3 at a time</span>
+    </div>
+    <div class="row">
+      <label for="pause">Pause between rounds (sec)</label>
+      <input type="number" id="pause" min="0" step="0.1" value="0.5">
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="showTaken"> Show taken names in the log</label>
+    </div>
+    <div class="log" id="log" hidden></div>
+  </section>
+
+  <section class="card">
+    <h2>Available</h2>
+    <ul class="found" id="found"></ul>
+    <div class="empty" id="foundEmpty">Nothing found yet.</div>
+    <div class="small-btns">
+      <button id="copyBtn">Copy</button>
+      <button id="dlBtn">Download .txt</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Test one name</h2>
+    <div class="row" style="margin-top:0">
+      <input type="text" id="testName" placeholder="a name you know is taken" autocapitalize="none" autocomplete="off" spellcheck="false">
+      <button class="btn" id="testBtn" style="flex:none;padding:9px 16px">Test</button>
+    </div>
+    <div class="testout" id="testOut"></div>
+    <div class="note">Use this first with a name that is taken and one that is free to make sure the results are right.</div>
+  </section>
+
+  <details class="card" id="keyBox" hidden>
+    <summary>Access key</summary>
+    <div class="row">
+      <input type="password" id="keyInput" placeholder="Access key" autocomplete="off">
+    </div>
+  </details>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var MODES = ["2l", "2n", "2c", "3l", "3n", "semi 1l", "3l words", "words"];
+  var L = "abcdefghijklmnopqrstuvwxyz", D = "0123456789", A = L + D;
+
+  var state = {
+    mode: "2l", wmin: 4, wmax: 6,
+    names: [], idx: 0, found: [], taken: 0, unclear: 0,
+    running: false, ctrl: null, loading: false
+  };
+
+  function $(id) { return document.getElementById(id); }
+
+  // ---- storage (always wrapped: it can be unavailable) ----
+  function store(key, value) {
+    try {
+      if (value === undefined) { return localStorage.getItem(key); }
+      localStorage.setItem(key, value);
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+  function saveKey() {
+    return "jc:" + state.mode + (state.mode === "words" ? ":" + state.wmin + "-" + state.wmax : "");
+  }
+  function saveProgress() {
+    store(saveKey(), JSON.stringify({
+      idx: state.idx, found: state.found, taken: state.taken, unclear: state.unclear
+    }));
+  }
+  function loadProgress() {
+    state.idx = 0; state.found = []; state.taken = 0; state.unclear = 0;
+    var raw = store(saveKey());
+    if (!raw) { return; }
+    try {
+      var p = JSON.parse(raw);
+      state.idx = p.idx | 0; state.found = p.found || [];
+      state.taken = p.taken | 0; state.unclear = p.unclear | 0;
+    } catch (e) { /* ignore */ }
+  }
+
+  // ---- name patterns ----
+  function product(chars, n) {
+    var out = [""];
+    for (var i = 0; i < n; i++) {
+      var next = [];
+      for (var a = 0; a < out.length; a++) {
+        for (var b = 0; b < chars.length; b++) { next.push(out[a] + chars[b]); }
+      }
+      out = next;
+    }
+    return out;
+  }
+  function headers() {
+    var h = {}, k = store("jc:key");
+    if (k) { h["X-Key"] = k; }
+    return h;
+  }
+  function getJson(url) {
+    return fetch(url, { headers: headers() }).then(function (r) {
+      if (r.status === 401) { throw new Error("auth"); }
+      if (!r.ok) { throw new Error("http " + r.status); }
+      return r.json();
+    });
+  }
+  function buildNames() {
+    switch (state.mode) {
+      case "2l": return Promise.resolve(product(L, 2));
+      case "2n": return Promise.resolve(product(D, 2));
+      case "2c": return Promise.resolve(product(A, 2));
+      case "3l": return Promise.resolve(product(L, 3));
+      case "3n": return Promise.resolve(product(D, 3));
+      case "semi 1l":
+        var out = [];
+        for (var i = 0; i < L.length; i++) {
+          out.push(L[i] + ".", "." + L[i], L[i] + "_", "_" + L[i]);
+        }
+        return Promise.resolve(out);
+      case "3l words": return getJson("/api/words?mode=3l");
+      default: return getJson("/api/words?mode=words&min=" + state.wmin + "&max=" + state.wmax);
+    }
+  }
+
+  // ---- UI ----
+  function setStatus(text) { $("status").textContent = text; }
+  function log(line) {
+    var el = $("log");
+    el.hidden = false;
+    el.textContent += line + "\n";
+    if (el.textContent.length > 6000) { el.textContent = el.textContent.slice(-4000); }
+    el.scrollTop = el.scrollHeight;
+  }
+  function render() {
+    var total = state.names.length;
+    $("barFill").style.width = (total ? (state.idx / total) * 100 : 0) + "%";
+    $("statFound").textContent = state.found.length + " available";
+    $("statTaken").textContent = state.taken + " taken";
+    $("statUnclear").textContent = state.unclear + " unclear";
+    $("statUnclear").hidden = state.unclear === 0;
+    var list = $("found");
+    list.innerHTML = "";
+    state.found.forEach(function (n) {
+      var li = document.createElement("li");
+      li.textContent = n;
+      list.appendChild(li);
+    });
+    $("foundEmpty").hidden = state.found.length > 0;
+  }
+  function updateButtons() {
+    $("startBtn").disabled = state.running || state.loading;
+    $("stopBtn").disabled = !state.running;
+    $("resetBtn").disabled = state.running;
+    $("wmin").disabled = $("wmax").disabled = state.running;
+    var chips = document.querySelectorAll(".chip");
+    for (var i = 0; i < chips.length; i++) {
+      chips[i].disabled = state.running;
+      chips[i].setAttribute("aria-pressed", chips[i].dataset.mode === state.mode ? "true" : "false");
+    }
+    $("wordLen").hidden = state.mode !== "words";
+  }
+  function idleStatus() {
+    var total = state.names.length;
+    if (state.idx >= total && total > 0) { setStatus("Finished - press Reset to run it again."); }
+    else if (state.idx > 0) { setStatus("Stopped at " + state.idx + " of " + total + " - press Start to resume."); }
+    else { setStatus(total + " names in this pattern."); }
+  }
+
+  function selectMode() {
+    if (state.running) { return; }
+    state.loading = true; updateButtons();
+    setStatus("Loading names...");
+    loadProgress();
+    buildNames().then(function (names) {
+      state.names = names;
+      state.loading = false;
+      if (state.idx > names.length) { state.idx = 0; }
+      render(); updateButtons(); idleStatus();
+    }).catch(function (e) {
+      state.loading = false; state.names = [];
+      render(); updateButtons();
+      setStatus(e.message === "auth" ? "Enter the access key (see 'Access key' below)." : "Could not load names. Check your connection.");
+      if (e.message === "auth") { $("keyBox").hidden = false; $("keyBox").open = true; }
+    });
+  }
+
+  // ---- checking ----
+  function sleep(ms, signal) {
+    return new Promise(function (resolve) {
+      var t = setTimeout(resolve, ms);
+      signal.addEventListener("abort", function () { clearTimeout(t); resolve(); }, { once: true });
+    });
+  }
+  function checkOne(name, signal) {
+    return fetch("/api/check?name=" + encodeURIComponent(name), { headers: headers(), signal: signal })
+      .then(function (r) {
+        if (r.status === 401) { return { state: "auth" }; }
+        return r.json().then(function (d) { return d && d.state ? d : { state: "error" }; })
+          .catch(function () { return { state: "error" }; });
+      })
+      .catch(function (e) {
+        if (e && e.name === "AbortError") { throw e; }
+        return { state: "error" };
+      });
+  }
+
+  function start() {
+    if (state.running || state.loading) { return; }
+    if (state.idx >= state.names.length) { idleStatus(); return; }
+    state.running = true;
+    state.ctrl = new AbortController();
+    updateButtons();
+    var signal = state.ctrl.signal;
+    var backoff = 0;
+    var finishedNote = "";
+
+    (function loop() {
+      if (!state.running || state.idx >= state.names.length) { return done(); }
+      var workers = parseInt($("workers").value, 10) || 1;
+      var pauseMs = Math.max(0, parseFloat($("pause").value) || 0) * 1000;
+      var batch = state.names.slice(state.idx, state.idx + workers);
+
+      Promise.all(batch.map(function (n) { return checkOne(n, signal); })).then(function (results) {
+        if (!state.running) { return done(); }
+        var has = function (s) { return results.some(function (r) { return r.state === s; }); };
+        if (has("auth")) {
+          finishedNote = "Access key needed or wrong.";
+          $("keyBox").hidden = false; $("keyBox").open = true;
+          return done();
+        }
+        if (has("rate")) {
+          backoff = Math.min(60, Math.max(5, backoff * 2));
+          setStatus("Rate limited - waiting " + backoff + "s (try a slower speed)");
+          return sleep(backoff * 1000, signal).then(loop);
+        }
+        if (has("error")) {
+          setStatus("Connection problem - retrying...");
+          return sleep(3000, signal).then(loop);
+        }
+        backoff = 0;
+        results.forEach(function (r, i) {
+          var n = batch[i];
+          if (r.state === "available") {
+            state.found.push(n);
+            log("+ " + n + "  available");
+          } else if (r.state === "taken") {
+            state.taken++;
+            if ($("showTaken").checked) { log("- " + n + "  taken"); }
+          } else {
+            state.unclear++;
+            log("? " + n + "  unclear (" + (r.detail || "") + ")");
+          }
+        });
+        state.idx += batch.length;
+        saveProgress(); render();
+        setStatus("Checking " + batch[batch.length - 1] + "  -  " + state.idx + " of " + state.names.length);
+        return sleep(pauseMs, signal).then(loop);
+      }).catch(function () { done(); });
+    })();
+
+    function done() {
+      state.running = false;
+      updateButtons();
+      saveProgress(); render();
+      if (finishedNote) { setStatus(finishedNote); } else { idleStatus(); }
+    }
+  }
+
+  function stop() {
+    state.running = false;
+    if (state.ctrl) { state.ctrl.abort(); }
+  }
+
+  function reset() {
+    if (state.running) { return; }
+    state.idx = 0; state.found = []; state.taken = 0; state.unclear = 0;
+    $("log").textContent = "";
+    saveProgress(); render(); idleStatus();
+  }
+
+  // ---- output ----
+  function copyFound() {
+    var text = state.found.join("\n");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { flash($("copyBtn"), "Copied"); },
+        function () { window.prompt("Copy these:", text); });
+    } else { window.prompt("Copy these:", text); }
+  }
+  function flash(btn, text) {
+    var old = btn.textContent; btn.textContent = text;
+    setTimeout(function () { btn.textContent = old; }, 1200);
+  }
+  function download() {
+    var blob = new Blob([state.found.join("\n")], { type: "text/plain" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "available.txt";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
+  // ---- test one name ----
+  function testName() {
+    var name = $("testName").value.trim().toLowerCase();
+    var out = $("testOut");
+    if (!name) { return; }
+    out.textContent = "Checking...";
+    fetch("/api/test?name=" + encodeURIComponent(name), { headers: headers() })
+      .then(function (r) { return r.json().then(function (d) { return { s: r.status, d: d }; }); })
+      .then(function (res) {
+        if (res.s === 401) { out.textContent = "Access key needed."; $("keyBox").hidden = false; $("keyBox").open = true; return; }
+        var d = res.d;
+        if (d.error) { out.textContent = d.error; return; }
+        out.textContent = "Asked:   " + d.asked + "\nEnded:   " + d.ended + "\nStatus:  " + d.status +
+          "\nPage:    " + d.page + "\n\nVerdict: " + String(d.verdict).toUpperCase();
+        out.style.whiteSpace = "pre-wrap";
+      })
+      .catch(function () { out.textContent = "Could not reach the server."; });
+  }
+
+  // ---- setup ----
+  function init() {
+    var modes = $("modes");
+    MODES.forEach(function (m) {
+      var b = document.createElement("button");
+      b.className = "chip"; b.textContent = m; b.dataset.mode = m;
+      b.setAttribute("aria-pressed", "false");
+      b.addEventListener("click", function () { state.mode = m; selectMode(); });
+      modes.appendChild(b);
+    });
+    [4, 5, 6, 7, 8].forEach(function (n) {
+      ["wmin", "wmax"].forEach(function (id) {
+        var o = document.createElement("option"); o.value = n; o.textContent = n; $(id).appendChild(o);
+      });
+    });
+    $("wmin").value = state.wmin; $("wmax").value = state.wmax;
+    function lengthChanged() {
+      var lo = parseInt($("wmin").value, 10), hi = parseInt($("wmax").value, 10);
+      if (lo > hi) { var t = lo; lo = hi; hi = t; $("wmin").value = lo; $("wmax").value = hi; }
+      state.wmin = lo; state.wmax = hi; selectMode();
+    }
+    $("wmin").addEventListener("change", lengthChanged);
+    $("wmax").addEventListener("change", lengthChanged);
+
+    $("workers").addEventListener("input", function () {
+      $("workersVal").textContent = $("workers").value + " at a time";
+    });
+    $("startBtn").addEventListener("click", start);
+    $("stopBtn").addEventListener("click", stop);
+    $("resetBtn").addEventListener("click", reset);
+    $("showTaken").addEventListener("change", function () { $("log").hidden = false; });
+    $("copyBtn").addEventListener("click", copyFound);
+    $("dlBtn").addEventListener("click", download);
+    $("testBtn").addEventListener("click", testName);
+    $("testName").addEventListener("keydown", function (e) { if (e.key === "Enter") { testName(); } });
+    $("keyInput").value = store("jc:key") || "";
+    $("keyInput").addEventListener("change", function () { store("jc:key", $("keyInput").value.trim()); selectMode(); });
+
+    fetch("/api/config").then(function (r) { return r.json(); }).then(function (c) {
+      if (c.needs_key) { $("keyBox").hidden = false; if (!store("jc:key")) { $("keyBox").open = true; } }
+    }).catch(function () {}).then(selectMode);
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
