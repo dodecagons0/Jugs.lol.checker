@@ -17,13 +17,15 @@ import os
 import re
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache, wraps
 
+import requests
 from flask import Flask, jsonify, request, send_from_directory
+from http.cookiejar import DefaultCookiePolicy
+from requests.adapters import HTTPAdapter
 
 from words_data import THREE_LETTER_WORDS, load_words
 
@@ -32,11 +34,13 @@ TARGET_URL = os.environ.get("TARGET_URL", "https://jugs.lol/{username}")
 AVAILABLE_TEXT = os.environ.get("AVAILABLE_TEXT", "").strip()
 ACCESS_KEY = os.environ.get("ACCESS_KEY", "").strip()
 RATE_LIMIT = int(os.environ.get("RATE_LIMIT", "1000"))
+MAX_BATCH = 40  # names per request
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 NAME_RE = re.compile(r"^[a-z0-9._]{1,16}$")
+pool = ThreadPoolExecutor(max_workers=64)
 
 app = Flask(__name__)
 
@@ -52,24 +56,29 @@ def client_ip():
     return forwarded.split(",")[0].strip() or request.remote_addr or "unknown"
 
 
-def over_limit(ip):
+def over_limit(ip, cost=1):
+    """Count `cost` lookups against this visitor's allowance for the last 10 s."""
     now = time.time()
     with _lock:
         if len(_hits) > 5000:
             _hits.clear()
         q = _hits.setdefault(ip, deque())
-        while q and now - q[0] > 10:
+        while q and now - q[0][0] > 10:
             q.popleft()
-        if len(q) >= RATE_LIMIT:
+        if sum(c for _, c in q) + cost > RATE_LIMIT:
             return True
-        q.append(now)
+        q.append((now, cost))
         return False
+
+
+def key_ok():
+    return not ACCESS_KEY or hmac.compare_digest(request.headers.get("X-Key", ""), ACCESS_KEY)
 
 
 def guarded(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        if ACCESS_KEY and not hmac.compare_digest(request.headers.get("X-Key", ""), ACCESS_KEY):
+        if not key_ok():
             return jsonify(state="auth", detail="access key needed"), 401
         if over_limit(client_ip()):
             return jsonify(state="rate", detail="too many requests"), 429
@@ -85,21 +94,20 @@ def build_url(name):
     return TARGET_URL.replace("{username}", urllib.parse.quote(name, safe=""))
 
 
+# One shared session keeps connections to the target site open and reuses them,
+# which is much faster than opening a new secure connection for every name.
+session = requests.Session()
+session.headers["User-Agent"] = UA
+session.cookies.set_policy(DefaultCookiePolicy(allowed_domains=[]))  # store no cookies
+session.mount("http://", HTTPAdapter(pool_connections=4, pool_maxsize=64))
+session.mount("https://", HTTPAdapter(pool_connections=4, pool_maxsize=64))
+
+
 def fetch(name, want_body):
     """Return (status, final_url, body) or raise on network failure."""
-    req = urllib.request.Request(build_url(name), headers={"User-Agent": UA})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            body = r.read(300000).decode("utf-8", "ignore") if want_body else ""
-            return r.status, r.geturl(), body
-    except urllib.error.HTTPError as e:
-        body = ""
-        if want_body:
-            try:
-                body = e.read(300000).decode("utf-8", "ignore")
-            except Exception:
-                pass
-        return e.code, build_url(name), body
+    r = session.get(build_url(name), timeout=10)
+    body = r.text[:300000] if want_body else ""
+    return r.status_code, r.url, body
 
 
 def verdict_for(status, body):
@@ -146,17 +154,35 @@ def words():
     return jsonify(_words(lo, hi))
 
 
-@app.route("/api/check")
-@guarded
-def check():
-    name = request.args.get("name", "").lower()
+def check_one_name(name):
     if not NAME_RE.match(name):
-        return jsonify(state="unknown", detail="bad name"), 400
+        return {"name": name, "state": "unknown", "detail": "bad name"}
     try:
         status, _, body = fetch(name, bool(AVAILABLE_TEXT))
     except Exception as e:
-        return jsonify(state="error", detail=str(e)[:80])
-    return jsonify(state=verdict_for(status, body), detail=f"HTTP {status}")
+        return {"name": name, "state": "error", "detail": str(e)[:80]}
+    return {"name": name, "state": verdict_for(status, body), "detail": f"HTTP {status}"}
+
+
+@app.route("/api/check")
+@guarded
+def check():
+    result = check_one_name(request.args.get("name", "").lower())
+    return jsonify(result), (400 if result["detail"] == "bad name" else 200)
+
+
+@app.route("/api/check_batch", methods=["POST"])
+def check_batch():
+    """Look up several names at once (done in parallel here on the server)."""
+    if not key_ok():
+        return jsonify(state="auth", detail="access key needed"), 401
+    names = (request.get_json(silent=True) or {}).get("names")
+    if not isinstance(names, list) or not 1 <= len(names) <= MAX_BATCH:
+        return jsonify(state="unknown", detail="bad request"), 400
+    names = [str(n).lower() for n in names]
+    if over_limit(client_ip(), len(names)):
+        return jsonify(state="rate", detail="too many requests"), 429
+    return jsonify(results=list(pool.map(check_one_name, names)))
 
 
 @app.route("/api/test")

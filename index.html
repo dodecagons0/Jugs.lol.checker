@@ -115,8 +115,8 @@
       <span id="workersVal">3 at a time</span>
     </div>
     <div class="row">
-      <label for="pause">Pause between rounds (sec)</label>
-      <input type="number" id="pause" min="0" step="0.1" value="0.5">
+      <label for="pause">Pause after each check (sec)</label>
+      <input type="number" id="pause" min="0" step="0.1" value="0.1">
     </div>
     <div class="row">
       <label><input type="checkbox" id="showTaken"> Show taken names in the log</label>
@@ -301,21 +301,55 @@
   // ---- checking ----
   function sleep(ms, signal) {
     return new Promise(function (resolve) {
+      if (signal.aborted) { resolve(); return; }
       var t = setTimeout(resolve, ms);
       signal.addEventListener("abort", function () { clearTimeout(t); resolve(); }, { once: true });
     });
   }
-  function checkOne(name, signal) {
-    return fetch("/api/check?name=" + encodeURIComponent(name), { headers: headers(), signal: signal })
-      .then(function (r) {
-        if (r.status === 401) { return { state: "auth" }; }
-        return r.json().then(function (d) { return d && d.state ? d : { state: "error" }; })
-          .catch(function () { return { state: "error" }; });
-      })
-      .catch(function (e) {
-        if (e && e.name === "AbortError") { throw e; }
-        return { state: "error" };
+  // Sends several names in one request. Returns {failed: "auth"|"rate"|"error"}
+  // if the whole thing should be retried, otherwise {results: [...]}.
+  function checkBatch(names, signal) {
+    var h = headers(); h["Content-Type"] = "application/json";
+    return fetch("/api/check_batch", {
+      method: "POST", headers: h, body: JSON.stringify({ names: names }), signal: signal
+    }).then(function (r) {
+      if (r.status === 401) { return { failed: "auth" }; }
+      if (r.status === 429) { return { failed: "rate" }; }
+      if (!r.ok) { return { failed: "error" }; }
+      return r.json().then(function (d) {
+        var rs = d && d.results;
+        if (!rs || rs.length !== names.length) { return { failed: "error" }; }
+        if (rs.some(function (x) { return x.state === "rate"; })) { return { failed: "rate" }; }
+        if (rs.some(function (x) { return x.state === "error"; })) { return { failed: "error" }; }
+        return { results: rs };
       });
+    }).catch(function (e) {
+      if (e && e.name === "AbortError") { throw e; }
+      return { failed: "error" };
+    });
+  }
+
+  var recent = [];      // when each recent check finished (for the speed readout)
+  var lastFlush = 0;
+
+  function speedText() {
+    var now = Date.now(), cut = now - 4000;
+    while (recent.length && recent[0] < cut) { recent.shift(); }
+    if (recent.length < 3) { return ""; }
+    var span = (recent[recent.length - 1] - recent[0]) / 1000;
+    if (span < 0.3) { return ""; }
+    return "  -  " + ((recent.length - 1) / span).toFixed(1) + " per sec";
+  }
+
+  // save + redraw, at most a few times a second so fast runs stay smooth
+  function flush(force, lastName) {
+    var now = Date.now();
+    if (!force && now - lastFlush < 250) { return; }
+    lastFlush = now;
+    saveProgress(); render();
+    if (state.running && lastName) {
+      setStatus("Checking " + lastName + "  -  " + state.idx + " of " + state.names.length + speedText());
+    }
   }
 
   function start() {
@@ -324,60 +358,92 @@
     state.running = true;
     state.ctrl = new AbortController();
     updateButtons();
+    recent = [];
+
     var signal = state.ctrl.signal;
-    var backoff = 0;
-    var finishedNote = "";
+    var total = state.names.length;
+    var nWorkers = Math.max(1, parseInt($("workers").value, 10) || 1);
+    var pauseMs = Math.max(0, parseFloat($("pause").value) || 0) * 1000;
+    var next = state.idx;        // next name to hand to a worker
+    var frontier = state.idx;    // every name below this is fully processed
+    var finished = {};           // results that arrived out of order
+    var pauseUntil = 0, backoff = 0, note = "";
 
-    (function loop() {
-      if (!state.running || state.idx >= state.names.length) { return done(); }
-      var workers = parseInt($("workers").value, 10) || 1;
-      var pauseMs = Math.max(0, parseFloat($("pause").value) || 0) * 1000;
-      var batch = state.names.slice(state.idx, state.idx + workers);
+    function record() {
+      while (Object.prototype.hasOwnProperty.call(finished, frontier)) {
+        var r = finished[frontier], n = state.names[frontier];
+        delete finished[frontier];
+        if (r.state === "available") {
+          if (state.found.indexOf(n) === -1) { state.found.push(n); }
+          log("+ " + n + "  available");
+        } else if (r.state === "taken") {
+          state.taken++;
+          if ($("showTaken").checked) { log("- " + n + "  taken"); }
+        } else {
+          state.unclear++;
+          log("? " + n + "  unclear (" + (r.detail || "") + ")");
+        }
+        frontier++;
+      }
+      state.idx = frontier;
+    }
 
-      Promise.all(batch.map(function (n) { return checkOne(n, signal); })).then(function (results) {
-        if (!state.running) { return done(); }
-        var has = function (s) { return results.some(function (r) { return r.state === s; }); };
-        if (has("auth")) {
-          finishedNote = "Access key needed or wrong.";
-          $("keyBox").hidden = false; $("keyBox").open = true;
-          return done();
-        }
-        if (has("rate")) {
-          backoff = Math.min(60, Math.max(5, backoff * 2));
-          setStatus("Rate limited - waiting " + backoff + "s (try a slower speed)");
-          return sleep(backoff * 1000, signal).then(loop);
-        }
-        if (has("error")) {
-          setStatus("Connection problem - retrying...");
-          return sleep(3000, signal).then(loop);
-        }
-        backoff = 0;
-        results.forEach(function (r, i) {
-          var n = batch[i];
-          if (r.state === "available") {
-            state.found.push(n);
-            log("+ " + n + "  available");
-          } else if (r.state === "taken") {
-            state.taken++;
-            if ($("showTaken").checked) { log("- " + n + "  taken"); }
-          } else {
-            state.unclear++;
-            log("? " + n + "  unclear (" + (r.detail || "") + ")");
+    // A few request loops run side by side. Each takes the next chunk of names as
+    // soon as it is free, so one slow check never holds everything else up.
+    var loops = Math.min(nWorkers, 4);
+    var chunk = Math.ceil(nWorkers / loops);
+
+    async function worker() {
+      while (state.running && next < total) {
+        var i = next;
+        var take = Math.min(chunk, total - next);
+        next += take;
+        var batch = state.names.slice(i, i + take);
+        var out;
+        for (;;) {
+          var wait = pauseUntil - Date.now();
+          if (wait > 0) { await sleep(wait, signal); }
+          if (!state.running) { return; }
+          try { out = await checkBatch(batch, signal); } catch (e) { return; }
+          if (!state.running) { return; }
+          if (out.failed === "auth") {
+            note = "Access key needed or wrong.";
+            $("keyBox").hidden = false; $("keyBox").open = true;
+            state.running = false; state.ctrl.abort();
+            return;
           }
-        });
-        state.idx += batch.length;
-        saveProgress(); render();
-        setStatus("Checking " + batch[batch.length - 1] + "  -  " + state.idx + " of " + state.names.length);
-        return sleep(pauseMs, signal).then(loop);
-      }).catch(function () { done(); });
-    })();
+          if (out.failed === "rate") {
+            if (Date.now() >= pauseUntil) {
+              backoff = Math.min(60, Math.max(5, backoff * 2));
+              pauseUntil = Date.now() + backoff * 1000;
+            }
+            setStatus("Rate limited - waiting " + backoff + "s (try a slower speed)");
+            continue;
+          }
+          if (out.failed === "error") {
+            if (Date.now() >= pauseUntil) { pauseUntil = Date.now() + 3000; }
+            setStatus("Connection problem - retrying...");
+            continue;
+          }
+          break;
+        }
+        if (Date.now() >= pauseUntil) { backoff = 0; }
+        var now = Date.now();
+        for (var j = 0; j < take; j++) { finished[i + j] = out.results[j]; recent.push(now); }
+        record();
+        flush(false, batch[take - 1]);
+        if (pauseMs > 0) { await sleep(pauseMs, signal); }
+      }
+    }
 
-    function done() {
+    var pool = [];
+    for (var k = 0; k < nWorkers; k++) { pool.push(worker()); }
+    Promise.all(pool).then(function () {
       state.running = false;
       updateButtons();
-      saveProgress(); render();
-      if (finishedNote) { setStatus(finishedNote); } else { idleStatus(); }
-    }
+      flush(true);
+      if (note) { setStatus(note); } else { idleStatus(); }
+    });
   }
 
   function stop() {
