@@ -9,7 +9,7 @@ Settings (all optional, set as environment variables on your host):
   TARGET_URL      page to look names up on   default https://jugs.lol/{username}
   AVAILABLE_TEXT  text that appears when a name is free (blank = 404 means free)
   ACCESS_KEY      if set, visitors must type this key before they can check
-  RATE_LIMIT      max lookups per visitor per 10 seconds (default 300)
+  RATE_LIMIT      max lookups per visitor per 10 seconds (default 1000)
 """
 
 import hmac
@@ -31,7 +31,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TARGET_URL = os.environ.get("TARGET_URL", "https://jugs.lol/{username}")
 AVAILABLE_TEXT = os.environ.get("AVAILABLE_TEXT", "").strip()
 ACCESS_KEY = os.environ.get("ACCESS_KEY", "").strip()
-RATE_LIMIT = int(os.environ.get("RATE_LIMIT", "300"))
+RATE_LIMIT = int(os.environ.get("RATE_LIMIT", "1000"))
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
